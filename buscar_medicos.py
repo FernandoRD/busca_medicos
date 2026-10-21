@@ -14,6 +14,19 @@ Desenvolvido para listas contendo Nome Completo e CRM em diversos formatos.
 
 import sys
 import os
+
+# Segurança para execução em modo windowed no Windows (onde sys.stdout e sys.stderr são None)
+class _NullStream:
+    def write(self, text):
+        pass
+    def flush(self):
+        pass
+
+if sys.stdout is None:
+    sys.stdout = _NullStream()
+if sys.stderr is None:
+    sys.stderr = _NullStream()
+
 import csv
 import re
 import time
@@ -21,7 +34,188 @@ import random
 import socket
 import unicodedata
 import urllib.parse
+import threading
+import queue
+import ctypes
+from ctypes import wintypes
+import tkinter as tk
+from tkinter import ttk
 from typing import Dict, List, Optional, Tuple, Set, Any, Union
+
+# ---------------------------------------------------------------------------
+# Estruturas e Chamadas Nativas do Windows (Win32 API via ctypes)
+# ---------------------------------------------------------------------------
+
+OFN_OVERWRITEPROMPT = 0x00000002
+OFN_HIDEREADONLY    = 0x00000004
+OFN_NOCHANGEDIR     = 0x00000008
+OFN_PATHMUSTEXIST   = 0x00000800
+OFN_FILEMUSTEXIST   = 0x00001000
+OFN_EXPLORER        = 0x00080000
+
+MB_OK               = 0x00000000
+MB_OKCANCEL         = 0x00000001
+MB_YESNO            = 0x00000004
+MB_ICONERROR        = 0x00000010
+MB_ICONWARNING      = 0x00000030
+MB_ICONINFORMATION  = 0x00000040
+IDYES               = 6
+
+class OPENFILENAMEW(ctypes.Structure):
+    _fields_ = [
+        ("lStructSize", ctypes.c_uint32),
+        ("hwndOwner", wintypes.HWND),
+        ("hInstance", wintypes.HINSTANCE),
+        ("lpstrFilter", wintypes.LPCWSTR),
+        ("lpstrCustomFilter", wintypes.LPWSTR),
+        ("nMaxCustFilter", ctypes.c_uint32),
+        ("nFilterIndex", ctypes.c_uint32),
+        ("lpstrFile", wintypes.LPWSTR),
+        ("nMaxFile", ctypes.c_uint32),
+        ("lpstrFileTitle", wintypes.LPWSTR),
+        ("nMaxFileTitle", ctypes.c_uint32),
+        ("lpstrInitialDir", wintypes.LPCWSTR),
+        ("lpstrTitle", wintypes.LPCWSTR),
+        ("Flags", ctypes.c_uint32),
+        ("nFileOffset", ctypes.c_uint16),
+        ("nFileExtension", ctypes.c_uint16),
+        ("lpstrDefExt", wintypes.LPCWSTR),
+        ("lCustData", wintypes.LPARAM),
+        ("lpfnHook", ctypes.c_void_p),
+        ("lpTemplateName", wintypes.LPCWSTR),
+        ("pvReserved", ctypes.c_void_p),
+        ("dwReserved", ctypes.c_uint32),
+        ("FlagsEx", ctypes.c_uint32),
+    ]
+
+def ativar_high_dpi():
+    """Ativa High-DPI no Windows para evitar janelas borradas em telas com escala >100%."""
+    if os.name == 'nt' and hasattr(ctypes, 'windll'):
+        try:
+            ctypes.windll.shcore.SetProcessDpiAwareness(2)
+        except Exception:
+            try:
+                ctypes.windll.shcore.SetProcessDpiAwareness(1)
+            except Exception:
+                try:
+                    ctypes.windll.user32.SetProcessDPIAware()
+                except Exception:
+                    pass
+
+def mostrar_mensagem_nativa(titulo: str, mensagem: str, tipo: str = "info", hwnd=None) -> int:
+    """Exibe caixas de diálogo 100% nativas do Windows via MessageBoxW (ou fallback Tk em Linux)."""
+    if os.name == 'nt' and hasattr(ctypes, 'windll'):
+        flags = MB_OK
+        if tipo == "erro":
+            flags |= MB_ICONERROR
+        elif tipo == "aviso":
+            flags |= MB_ICONWARNING
+        elif tipo == "pergunta":
+            flags = MB_YESNO | MB_ICONWARNING
+        else:
+            flags |= MB_ICONINFORMATION
+        return ctypes.windll.user32.MessageBoxW(hwnd, mensagem, titulo, flags)
+    else:
+        try:
+            from tkinter import messagebox
+            if tipo == "erro":
+                messagebox.showerror(titulo, mensagem)
+            elif tipo == "aviso":
+                messagebox.showwarning(titulo, mensagem)
+            elif tipo == "pergunta":
+                return IDYES if messagebox.askyesno(titulo, mensagem) else 0
+            else:
+                messagebox.showinfo(titulo, mensagem)
+        except Exception:
+            print(f"[{titulo}] {mensagem}")
+        return 1
+
+def selecionar_arquivo_entrada_nativo(hwnd=None, dir_inicial: str = "") -> Optional[str]:
+    """Abre o diálogo nativo do Windows de seleção de arquivo via GetOpenFileNameW."""
+    if os.name == 'nt' and hasattr(ctypes, 'windll'):
+        ofn = OPENFILENAMEW()
+        ofn.lStructSize = ctypes.sizeof(OPENFILENAMEW)
+        ofn.hwndOwner = hwnd
+        filtro = "Planilhas CSV (*.csv)\0*.csv\0Todos os arquivos (*.*)\0*.*\0\0"
+        ofn.lpstrFilter = filtro
+
+        buf = ctypes.create_unicode_buffer(2048)
+        ofn.lpstrFile = ctypes.cast(buf, wintypes.LPWSTR)
+        ofn.nMaxFile = len(buf)
+
+        if dir_inicial and os.path.isdir(dir_inicial):
+            ofn.lpstrInitialDir = dir_inicial
+
+        ofn.lpstrTitle = "Selecione a Planilha CSV de Entrada com os Médicos"
+        ofn.Flags = (
+            OFN_EXPLORER |
+            OFN_FILEMUSTEXIST |
+            OFN_PATHMUSTEXIST |
+            OFN_HIDEREADONLY |
+            OFN_NOCHANGEDIR
+        )
+
+        if ctypes.windll.comdlg32.GetOpenFileNameW(ctypes.byref(ofn)):
+            return buf.value
+        return None
+    else:
+        try:
+            from tkinter import filedialog
+            caminho = filedialog.askopenfilename(
+                title="Selecione o arquivo CSV de entrada",
+                initialdir=dir_inicial or os.getcwd(),
+                filetypes=[("Planilhas CSV", "*.csv"), ("Todos os arquivos", "*.*")]
+            )
+            return caminho if caminho else None
+        except Exception:
+            return None
+
+def selecionar_arquivo_saida_nativo(hwnd=None, dir_inicial: str = "", nome_padrao: str = "Medicos_pesquisados.csv") -> Optional[str]:
+    """Abre o diálogo nativo do Windows de salvamento via GetSaveFileNameW com nome padrão preenchido."""
+    if os.name == 'nt' and hasattr(ctypes, 'windll'):
+        ofn = OPENFILENAMEW()
+        ofn.lStructSize = ctypes.sizeof(OPENFILENAMEW)
+        ofn.hwndOwner = hwnd
+        filtro = "Planilhas CSV (*.csv)\0*.csv\0Todos os arquivos (*.*)\0*.*\0\0"
+        ofn.lpstrFilter = filtro
+
+        buf = ctypes.create_unicode_buffer(nome_padrao, 2048)
+        ofn.lpstrFile = ctypes.cast(buf, wintypes.LPWSTR)
+        ofn.nMaxFile = len(buf)
+
+        if dir_inicial and os.path.isdir(dir_inicial):
+            ofn.lpstrInitialDir = dir_inicial
+
+        ofn.lpstrTitle = "Selecione onde salvar o arquivo com os resultados"
+        ofn.lpstrDefExt = "csv"
+        ofn.Flags = (
+            OFN_EXPLORER |
+            OFN_PATHMUSTEXIST |
+            OFN_OVERWRITEPROMPT |
+            OFN_HIDEREADONLY |
+            OFN_NOCHANGEDIR
+        )
+
+        if ctypes.windll.comdlg32.GetSaveFileNameW(ctypes.byref(ofn)):
+            return buf.value
+        return None
+    else:
+        try:
+            from tkinter import filedialog
+            caminho = filedialog.asksaveasfilename(
+                title="Selecione onde salvar o resultado da pesquisa",
+                initialdir=dir_inicial or os.getcwd(),
+                initialfile=nome_padrao,
+                defaultextension=".csv",
+                filetypes=[("Planilhas CSV", "*.csv"), ("Todos os arquivos", "*.*")]
+            )
+            return caminho if caminho else None
+        except Exception:
+            return None
+
+class PlanilhaError(Exception):
+    """Exceção levantada em caso de erros de validação ou estrutura da planilha CSV."""
+    pass
 
 try:
     import requests
@@ -1178,12 +1372,16 @@ def detectar_delimitador(caminho_arquivo: str, encoding: str) -> str:
         return ';'
     return ','
 
-def processar_planilha(arquivo_entrada: str, arquivo_saida: str = "medicos_enriquecidos.csv"):
+def processar_planilha(
+    arquivo_entrada: str,
+    arquivo_saida: str = "Medicos_pesquisados.csv",
+    progresso_callback: Optional[Any] = None
+) -> int:
     arquivo_entrada = resolver_caminho_arquivo(arquivo_entrada)
     if not os.path.exists(arquivo_entrada):
-        print(f"\n[!] Arquivo '{arquivo_entrada}' não encontrado.")
-        print(f"    Certifique-se de colocar sua planilha na mesma pasta ou passar o caminho.\n")
-        sys.exit(1)
+        msg = f"Arquivo '{arquivo_entrada}' não encontrado.\nCertifique-se de colocar sua planilha na mesma pasta ou passar o caminho completo."
+        print(f"\n[!] {msg}\n")
+        raise FileNotFoundError(msg)
         
     encoding = 'utf-8'
     for enc in ['utf-8-sig', 'utf-8', 'latin-1', 'cp1252']:
@@ -1200,8 +1398,9 @@ def processar_planilha(arquivo_entrada: str, arquivo_saida: str = "medicos_enriq
     with open(arquivo_entrada, 'r', encoding=encoding, errors='ignore') as f:
         leitor = csv.DictReader(f, delimiter=delimitador)
         if not leitor.fieldnames:
-            print("[!] O arquivo CSV parece vazio ou sem cabeçalho.")
-            sys.exit(1)
+            msg = "O arquivo CSV parece vazio ou sem cabeçalho."
+            print(f"[!] {msg}")
+            raise PlanilhaError(msg)
             
         mapa = {remover_acentos(c.lower().strip()): c for c in leitor.fieldnames if c}
         
@@ -1224,10 +1423,14 @@ def processar_planilha(arquivo_entrada: str, arquivo_saida: str = "medicos_enriq
                 break
                 
         if not col_nome or not col_crm:
-            print("\n[!] Não foi possível identificar as colunas de 'Nome' e 'CRM'.")
-            print(f"    Colunas encontradas: {list(leitor.fieldnames)}")
-            print("    Renomeie os cabeçalhos para 'Nome' e 'CRM' e tente novamente.\n")
-            sys.exit(1)
+            colunas_disp = list(leitor.fieldnames) if leitor.fieldnames else []
+            msg = (
+                f"Não foi possível identificar as colunas de 'Nome' e 'CRM' no arquivo CSV.\n\n"
+                f"Colunas encontradas: {colunas_disp}\n\n"
+                f"Por favor, renomeie os cabeçalhos para 'Nome' e 'CRM' e tente novamente."
+            )
+            print(f"\n[!] {msg}\n")
+            raise PlanilhaError(msg)
             
         f.seek(0)
         leitor = csv.DictReader(f, delimiter=delimitador)
@@ -1286,11 +1489,27 @@ def processar_planilha(arquivo_entrada: str, arquivo_saida: str = "medicos_enriq
             crm_sanit = sanitizar_texto(crm_raw)
             
             if not nome_sanit:
+                if progresso_callback:
+                    try:
+                        progresso_callback(i, total, "(Registro sem nome)")
+                    except Exception:
+                        pass
                 continue
                 
             if (nome_sanit, crm_sanit) in processados_ids:
+                if progresso_callback:
+                    try:
+                        progresso_callback(i, total, f"{nome_sanit} (já processado)")
+                    except Exception:
+                        pass
                 continue
                 
+            if progresso_callback:
+                try:
+                    progresso_callback(i, total, nome_sanit)
+                except Exception:
+                    pass
+
             print(f"[{i:3d}/{total}] {nome_sanit[:30]:30} ({crm_sanit}) ... ", end='', flush=True)
             
             info = enriquecer_medico(nome_sanit, crm_sanit, uf_raw, session=session)
@@ -1335,13 +1554,348 @@ def processar_planilha(arquivo_entrada: str, arquivo_saida: str = "medicos_enriq
     print(f"  Formato: Delimitador ';' e codificação UTF-8 com BOM")
     print(f"  Pode abrir diretamente no Microsoft Excel ou Google Sheets.")
     print("=" * 65 + "\n")
+    return total
+
+# ---------------------------------------------------------------------------
+# Redirecionamento de Logs e Interface Gráfica (GUI)
+# ---------------------------------------------------------------------------
+
+class LogQueueWriter:
+    """Redirecionador seguro de stdout/stderr para a fila de logs da GUI e console original."""
+    def __init__(self, log_queue: queue.Queue, fallback_stream=None):
+        self.log_queue = log_queue
+        self.fallback_stream = fallback_stream
+
+    def write(self, text: str):
+        if text:
+            self.log_queue.put(text)
+            if self.fallback_stream and hasattr(self.fallback_stream, 'write'):
+                try:
+                    self.fallback_stream.write(text)
+                except Exception:
+                    pass
+
+    def flush(self):
+        if self.fallback_stream and hasattr(self.fallback_stream, 'flush'):
+            try:
+                self.fallback_stream.flush()
+            except Exception:
+                pass
+
+class BuscaMedicosGUI:
+    def __init__(self, root: tk.Tk):
+        self.root = root
+        self.root.title("Busca Médicos - Coletor de Dados Públicos")
+        self.root.geometry("740x580")
+        self.root.minsize(640, 480)
+
+        self.em_execucao = False
+
+        # Tema nativo do Windows no ttk quando disponível
+        style = ttk.Style()
+        temas_disponiveis = style.theme_names()
+        for tema in ['vista', 'winnative']:
+            if tema in temas_disponiveis:
+                style.theme_use(tema)
+                break
+
+        # Variáveis dos caminhos
+        self.caminho_entrada = tk.StringVar(value="")
+        self.caminho_saida = tk.StringVar(value="Medicos_pesquisados.csv")
+
+        # Fila e redirecionamento de logs
+        self.log_queue = queue.Queue()
+        self._orig_stdout = sys.stdout
+        self._orig_stderr = sys.stderr
+        sys.stdout = LogQueueWriter(self.log_queue, self._orig_stdout)
+        sys.stderr = LogQueueWriter(self.log_queue, self._orig_stderr)
+
+        self._construir_interface()
+        self.root.protocol("WM_DELETE_WINDOW", self._on_fechar)
+        self.root.after(100, self._atualizar_logs)
+
+    def _obter_hwnd(self):
+        if os.name == 'nt':
+            try:
+                return self.root.winfo_id()
+            except Exception:
+                return None
+        return None
+
+    def _construir_interface(self):
+        # NOTA: Não criamos barra de menu (Menu) conforme solicitado expressamente pelo usuário.
+        container = ttk.Frame(self.root, padding="15 15 15 15")
+        container.pack(fill='both', expand=True)
+
+        # Cabeçalho
+        frame_cabecalho = ttk.Frame(container)
+        frame_cabecalho.pack(fill='x', pady=(0, 12))
+
+        lbl_titulo = ttk.Label(
+            frame_cabecalho,
+            text="Coletor de Dados Públicos de Médicos",
+            font=("Segoe UI" if os.name == 'nt' else "Helvetica", 13, "bold")
+        )
+        lbl_titulo.pack(anchor='w')
+
+        lbl_sub = ttk.Label(
+            frame_cabecalho,
+            text="Enriqueça planilhas com telefones, consultórios, links de WhatsApp e perfis públicos.",
+            font=("Segoe UI" if os.name == 'nt' else "Helvetica", 9)
+        )
+        lbl_sub.pack(anchor='w', pady=(2, 0))
+
+        # Quadro de Seleção de Arquivos
+        frame_arquivos = ttk.LabelFrame(container, text=" Arquivos de Entrada e Saída ", padding="10 10 10 10")
+        frame_arquivos.pack(fill='x', pady=(0, 10))
+
+        lbl_in = ttk.Label(frame_arquivos, text="Arquivo de Entrada (CSV):", font=("Segoe UI" if os.name == 'nt' else "Helvetica", 9, "bold"))
+        lbl_in.grid(row=0, column=0, sticky='w', pady=(0, 2))
+
+        entry_in = ttk.Entry(frame_arquivos, textvariable=self.caminho_entrada, state='readonly')
+        entry_in.grid(row=1, column=0, sticky='ew', pady=(0, 8))
+
+        lbl_out = ttk.Label(frame_arquivos, text="Arquivo de Saída (CSV):", font=("Segoe UI" if os.name == 'nt' else "Helvetica", 9, "bold"))
+        lbl_out.grid(row=2, column=0, sticky='w', pady=(0, 2))
+
+        entry_out = ttk.Entry(frame_arquivos, textvariable=self.caminho_saida)
+        entry_out.grid(row=3, column=0, sticky='ew', pady=(0, 8))
+
+        frame_arquivos.columnconfigure(0, weight=1)
+
+        # Botão 1: Seleção em Sequência (Entrada -> Saída)
+        self.btn_selecionar = ttk.Button(
+            frame_arquivos,
+            text="Selecionar Arquivo e Local de Saída",
+            command=self.selecionar_sequencial
+        )
+        self.btn_selecionar.grid(row=4, column=0, sticky='ew', pady=(4, 2))
+
+        # Botão 2: Começar
+        frame_acao = ttk.Frame(container)
+        frame_acao.pack(fill='x', pady=(5, 10))
+
+        self.btn_comecar = ttk.Button(
+            frame_acao,
+            text="Começar",
+            command=self.on_comecar
+        )
+        self.btn_comecar.pack(fill='x', ipady=6)
+
+        # Barra de Progresso e Status
+        frame_progresso = ttk.Frame(container)
+        frame_progresso.pack(fill='x', pady=(0, 8))
+
+        self.status_label = ttk.Label(
+            frame_progresso,
+            text="Pronto para iniciar. Selecione os arquivos e clique em 'Começar'.",
+            font=("Segoe UI" if os.name == 'nt' else "Helvetica", 9)
+        )
+        self.status_label.pack(anchor='w', pady=(0, 4))
+
+        self.progresso = ttk.Progressbar(frame_progresso, orient='horizontal', mode='determinate')
+        self.progresso.pack(fill='x')
+
+        # Área de Logs em Tempo Real
+        lbl_logs = ttk.Label(
+            container,
+            text="Registro de Atividades (Logs em tempo real):",
+            font=("Segoe UI" if os.name == 'nt' else "Helvetica", 9, "bold")
+        )
+        lbl_logs.pack(anchor='w', pady=(4, 2))
+
+        frame_log = ttk.Frame(container)
+        frame_log.pack(fill='both', expand=True)
+
+        scroll = ttk.Scrollbar(frame_log, orient='vertical')
+        scroll.pack(side='right', fill='y')
+
+        self.area_log = tk.Text(
+            frame_log,
+            wrap='char',
+            yscrollcommand=scroll.set,
+            font=("Consolas" if os.name == 'nt' else "Monospace", 9),
+            state='disabled',
+            bg="#fdfdfd" if os.name == 'nt' else "#ffffff",
+            relief='solid',
+            borderwidth=1
+        )
+        self.area_log.pack(side='left', fill='both', expand=True)
+        scroll.config(command=self.area_log.yview)
+
+    def selecionar_sequencial(self):
+        """Abre em sequência: 1º entrada via GetOpenFileNameW, depois saída via GetSaveFileNameW."""
+        hwnd = self._obter_hwnd()
+        dir_atual = ""
+        if self.caminho_entrada.get() and os.path.exists(self.caminho_entrada.get()):
+            dir_atual = os.path.dirname(os.path.abspath(self.caminho_entrada.get()))
+        elif os.path.exists(os.getcwd()):
+            dir_atual = os.getcwd()
+
+        # Diálogo 1: Selecionar entrada
+        arquivo_in = selecionar_arquivo_entrada_nativo(hwnd=hwnd, dir_inicial=dir_atual)
+        if not arquivo_in:
+            return  # Usuário cancelou
+
+        self.caminho_entrada.set(arquivo_in)
+        dir_sugerido = os.path.dirname(os.path.abspath(arquivo_in))
+        saida_padrao = os.path.join(dir_sugerido, "Medicos_pesquisados.csv")
+
+        # Diálogo 2: Selecionar saída imediatamente (se o 1º não foi cancelado)
+        arquivo_out = selecionar_arquivo_saida_nativo(
+            hwnd=hwnd,
+            dir_inicial=dir_sugerido,
+            nome_padrao="Medicos_pesquisados.csv"
+        )
+        if arquivo_out:
+            self.caminho_saida.set(arquivo_out)
+        else:
+            # Fallback seguro com caminho padrão preenchido
+            if not self.caminho_saida.get() or self.caminho_saida.get() == "Medicos_pesquisados.csv":
+                self.caminho_saida.set(saida_padrao)
+
+        self.status_label.config(text="Arquivos selecionados. Clique em 'Começar' para iniciar a busca.")
+
+    def on_comecar(self):
+        """Inicia a busca na aplicação ou aciona a seleção caso os arquivos ainda não tenham sido definidos."""
+        if self.em_execucao:
+            return
+
+        arquivo_in = self.caminho_entrada.get().strip()
+        if not arquivo_in or not os.path.exists(arquivo_in):
+            # Se o usuário clicar em "Começar" sem ter escolhido os arquivos ainda, aciona a seleção em sequência
+            self.selecionar_sequencial()
+            arquivo_in = self.caminho_entrada.get().strip()
+            if not arquivo_in or not os.path.exists(arquivo_in):
+                mostrar_mensagem_nativa(
+                    "Arquivo de Entrada Não Selecionado",
+                    "Por favor, selecione uma planilha CSV de entrada válida antes de começar.",
+                    tipo="aviso",
+                    hwnd=self._obter_hwnd()
+                )
+                return
+
+        arquivo_out = self.caminho_saida.get().strip()
+        if not arquivo_out:
+            dir_in = os.path.dirname(os.path.abspath(arquivo_in))
+            arquivo_out = os.path.join(dir_in, "Medicos_pesquisados.csv")
+            self.caminho_saida.set(arquivo_out)
+
+        self._iniciar_execucao(arquivo_in, arquivo_out)
+
+    def _iniciar_execucao(self, arquivo_in: str, arquivo_out: str):
+        self.em_execucao = True
+        self.btn_comecar.config(state='disabled')
+        self.btn_selecionar.config(state='disabled')
+        self.progresso['value'] = 0
+        self.status_label.config(text="Iniciando processamento...")
+
+        t = threading.Thread(
+            target=self._worker_processamento,
+            args=(arquivo_in, arquivo_out),
+            daemon=True
+        )
+        t.start()
+
+    def _worker_processamento(self, arquivo_in: str, arquivo_out: str):
+        try:
+            total = processar_planilha(
+                arquivo_in,
+                arquivo_out,
+                progresso_callback=self._progresso_callback
+            )
+            self.root.after(0, lambda: self._on_sucesso(total, arquivo_out))
+        except Exception as e:
+            msg_erro = str(e)
+            self.root.after(0, lambda: self._on_erro(msg_erro))
+
+    def _progresso_callback(self, i: int, total: int, nome: str):
+        def _atualizar():
+            self.progresso['maximum'] = total
+            self.progresso['value'] = i
+            self.status_label.config(text=f"Processando [{i}/{total}]: {nome}")
+        self.root.after(0, _atualizar)
+
+    def _on_sucesso(self, total: int, arquivo_out: str):
+        self.em_execucao = False
+        self.btn_comecar.config(state='normal')
+        self.btn_selecionar.config(state='normal')
+        self.progresso['value'] = self.progresso['maximum']
+        self.status_label.config(text=f"Concluído! {total} médicos processados com sucesso.")
+        mostrar_mensagem_nativa(
+            "Busca Concluída com Sucesso",
+            f"A coleta e enriquecimento dos médicos foram concluídos com sucesso!\n\n"
+            f"Total de registros: {total}\n"
+            f"Arquivo gerado:\n{arquivo_out}\n\n"
+            f"O arquivo pode ser aberto diretamente no Microsoft Excel.",
+            tipo="info",
+            hwnd=self._obter_hwnd()
+        )
+
+    def _on_erro(self, msg_erro: str):
+        self.em_execucao = False
+        self.btn_comecar.config(state='normal')
+        self.btn_selecionar.config(state='normal')
+        self.status_label.config(text="Erro durante o processamento.")
+        mostrar_mensagem_nativa(
+            "Erro no Processamento",
+            f"Não foi possível concluir a busca:\n\n{msg_erro}",
+            tipo="erro",
+            hwnd=self._obter_hwnd()
+        )
+
+    def _atualizar_logs(self):
+        texto_acumulado = []
+        try:
+            while True:
+                texto = self.log_queue.get_nowait()
+                texto_acumulado.append(texto)
+        except queue.Empty:
+            pass
+
+        if texto_acumulado:
+            self.area_log.configure(state='normal')
+            self.area_log.insert('end', "".join(texto_acumulado))
+            self.area_log.see('end')
+            self.area_log.configure(state='disabled')
+
+        self.root.after(100, self._atualizar_logs)
+
+    def _on_fechar(self):
+        if self.em_execucao:
+            ret = mostrar_mensagem_nativa(
+                "Confirmação de Saída",
+                "Uma busca está em andamento no momento.\nDeseja realmente interromper e fechar?",
+                tipo="pergunta",
+                hwnd=self._obter_hwnd()
+            )
+            if ret != IDYES:
+                return
+        sys.stdout = self._orig_stdout
+        sys.stderr = self._orig_stderr
+        self.root.destroy()
+
+def iniciar_gui():
+    """Inicia a aplicação gráfica."""
+    ativar_high_dpi()
+    root = tk.Tk()
+    app = BuscaMedicosGUI(root)
+    root.mainloop()
 
 if __name__ == '__main__':
-    arquivo_padrao = 'Medicos.csv'
-    if not os.path.exists(arquivo_padrao) and os.path.exists('medicos.csv'):
-        arquivo_padrao = 'medicos.csv'
-        
-    arquivo_in = sys.argv[1] if len(sys.argv) > 1 else arquivo_padrao
-    arquivo_in = resolver_caminho_arquivo(arquivo_in)
-    arquivo_out = sys.argv[2] if len(sys.argv) > 2 else 'medicos_enriquecidos.csv'
-    processar_planilha(arquivo_in, arquivo_out)
+    if len(sys.argv) > 1:
+        if sys.argv[1] in ('-h', '--help'):
+            print("Uso: python buscar_medicos.py [arquivo_entrada.csv] [arquivo_saida.csv]")
+            print("     Sem argumentos: inicia a interface gráfica (GUI).")
+            sys.exit(0)
+
+        arquivo_in = resolver_caminho_arquivo(sys.argv[1])
+        arquivo_out = sys.argv[2] if len(sys.argv) > 2 else "Medicos_pesquisados.csv"
+        try:
+            processar_planilha(arquivo_in, arquivo_out)
+        except Exception as e:
+            print(f"\n[!] Erro no processamento: {e}", file=sys.stderr)
+            sys.exit(1)
+    else:
+        # Modo Interface Gráfica (GUI) - padrão ao dar duplo clique no executável
+        iniciar_gui()

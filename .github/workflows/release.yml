@@ -31,7 +31,7 @@ jobs:
 
       - name: Build executable with PyInstaller
         run: |
-          pyinstaller --noconfirm --onefile --clean --console --name buscar_medicos buscar_medicos.py
+          pyinstaller --noconfirm --onefile --clean --windowed --name buscar_medicos buscar_medicos.py
 
       - name: Verify executable
         shell: bash
