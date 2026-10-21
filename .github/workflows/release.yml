@@ -1,0 +1,59 @@
+name: Build and Release Windows Executable
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build-windows:
+    name: Build Windows Executable
+    runs-on: windows-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python 3.12
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          cache: 'pip'
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt pyinstaller
+
+      - name: Build executable with PyInstaller
+        run: |
+          pyinstaller --noconfirm --onefile --clean --console --name buscar_medicos buscar_medicos.py
+
+      - name: Verify executable
+        shell: bash
+        run: |
+          if [ ! -f "dist/buscar_medicos.exe" ]; then
+            echo "::error::dist/buscar_medicos.exe not found!"
+            exit 1
+          fi
+          echo "Found dist/buscar_medicos.exe"
+          ls -lh dist/buscar_medicos.exe
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: buscar_medicos-windows-exe
+          path: dist/buscar_medicos.exe
+
+      - name: Publish to GitHub Release
+        uses: softprops/action-gh-release@v2
+        if: startsWith(github.ref, 'refs/tags/v')
+        with:
+          files: dist/buscar_medicos.exe
+          generate_release_notes: true
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
