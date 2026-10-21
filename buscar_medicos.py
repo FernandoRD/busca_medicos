@@ -38,9 +38,20 @@ import threading
 import queue
 import ctypes
 from ctypes import wintypes
-import tkinter as tk
-from tkinter import ttk
 from typing import Dict, List, Optional, Tuple, Set, Any, Union
+
+try:
+    from PyQt6 import QtWidgets, QtCore, QtGui
+    from PyQt6.QtWidgets import (
+        QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
+        QLabel, QLineEdit, QPushButton, QProgressBar, QPlainTextEdit,
+        QFrame, QFileDialog, QMessageBox, QSizePolicy
+    )
+    from PyQt6.QtCore import Qt, pyqtSignal, QObject
+    from PyQt6.QtGui import QFont, QTextCursor
+    PYQT6_DISPONIVEL = True
+except ImportError:
+    PYQT6_DISPONIVEL = False
 
 # ---------------------------------------------------------------------------
 # Estruturas e Chamadas Nativas do Windows (Win32 API via ctypes)
@@ -102,8 +113,8 @@ def ativar_high_dpi():
                 except Exception:
                     pass
 
-def mostrar_mensagem_nativa(titulo: str, mensagem: str, tipo: str = "info", hwnd=None) -> int:
-    """Exibe caixas de diálogo 100% nativas do Windows via MessageBoxW (ou fallback Tk em Linux)."""
+def mostrar_mensagem_nativa(titulo: str, mensagem: str, tipo: str = "info", hwnd=None, parent_widget=None) -> int:
+    """Exibe caixas de diálogo 100% nativas do Windows via MessageBoxW (ou fallback PyQt fora do Windows)."""
     if os.name == 'nt' and hasattr(ctypes, 'windll'):
         flags = MB_OK
         if tipo == "erro":
@@ -116,21 +127,30 @@ def mostrar_mensagem_nativa(titulo: str, mensagem: str, tipo: str = "info", hwnd
             flags |= MB_ICONINFORMATION
         return ctypes.windll.user32.MessageBoxW(hwnd, mensagem, titulo, flags)
     else:
-        try:
-            from tkinter import messagebox
-            if tipo == "erro":
-                messagebox.showerror(titulo, mensagem)
-            elif tipo == "aviso":
-                messagebox.showwarning(titulo, mensagem)
-            elif tipo == "pergunta":
-                return IDYES if messagebox.askyesno(titulo, mensagem) else 0
-            else:
-                messagebox.showinfo(titulo, mensagem)
-        except Exception:
-            print(f"[{titulo}] {mensagem}")
+        if PYQT6_DISPONIVEL:
+            try:
+                if QApplication.instance():
+                    if tipo == "erro":
+                        QMessageBox.critical(parent_widget, titulo, mensagem)
+                        return 1
+                    elif tipo == "aviso":
+                        QMessageBox.warning(parent_widget, titulo, mensagem)
+                        return 1
+                    elif tipo == "pergunta":
+                        res = QMessageBox.question(
+                            parent_widget, titulo, mensagem,
+                            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No
+                        )
+                        return IDYES if res == QMessageBox.StandardButton.Yes else 0
+                    else:
+                        QMessageBox.information(parent_widget, titulo, mensagem)
+                        return 1
+            except Exception:
+                pass
+        print(f"[{titulo}] {mensagem}")
         return 1
 
-def selecionar_arquivo_entrada_nativo(hwnd=None, dir_inicial: str = "") -> Optional[str]:
+def selecionar_arquivo_entrada_nativo(hwnd=None, dir_inicial: str = "", parent_widget=None) -> Optional[str]:
     """Abre o diálogo nativo do Windows de seleção de arquivo via GetOpenFileNameW."""
     if os.name == 'nt' and hasattr(ctypes, 'windll'):
         ofn = OPENFILENAMEW()
@@ -159,18 +179,21 @@ def selecionar_arquivo_entrada_nativo(hwnd=None, dir_inicial: str = "") -> Optio
             return buf.value
         return None
     else:
-        try:
-            from tkinter import filedialog
-            caminho = filedialog.askopenfilename(
-                title="Selecione o arquivo CSV de entrada",
-                initialdir=dir_inicial or os.getcwd(),
-                filetypes=[("Planilhas CSV", "*.csv"), ("Todos os arquivos", "*.*")]
-            )
-            return caminho if caminho else None
-        except Exception:
-            return None
+        if PYQT6_DISPONIVEL:
+            try:
+                if QApplication.instance():
+                    caminho, _ = QFileDialog.getOpenFileName(
+                        parent_widget,
+                        "Selecione o arquivo CSV de entrada",
+                        dir_inicial or os.getcwd(),
+                        "Planilhas CSV (*.csv);;Todos os arquivos (*.*)"
+                    )
+                    return caminho if caminho else None
+            except Exception:
+                pass
+        return None
 
-def selecionar_arquivo_saida_nativo(hwnd=None, dir_inicial: str = "", nome_padrao: str = "Medicos_pesquisados.csv") -> Optional[str]:
+def selecionar_arquivo_saida_nativo(hwnd=None, dir_inicial: str = "", nome_padrao: str = "Medicos_pesquisados.csv", parent_widget=None) -> Optional[str]:
     """Abre o diálogo nativo do Windows de salvamento via GetSaveFileNameW com nome padrão preenchido."""
     if os.name == 'nt' and hasattr(ctypes, 'windll'):
         ofn = OPENFILENAMEW()
@@ -200,18 +223,20 @@ def selecionar_arquivo_saida_nativo(hwnd=None, dir_inicial: str = "", nome_padra
             return buf.value
         return None
     else:
-        try:
-            from tkinter import filedialog
-            caminho = filedialog.asksaveasfilename(
-                title="Selecione onde salvar o resultado da pesquisa",
-                initialdir=dir_inicial or os.getcwd(),
-                initialfile=nome_padrao,
-                defaultextension=".csv",
-                filetypes=[("Planilhas CSV", "*.csv"), ("Todos os arquivos", "*.*")]
-            )
-            return caminho if caminho else None
-        except Exception:
-            return None
+        if PYQT6_DISPONIVEL:
+            try:
+                if QApplication.instance():
+                    caminho_inicial = os.path.join(dir_inicial or os.getcwd(), nome_padrao)
+                    caminho, _ = QFileDialog.getSaveFileName(
+                        parent_widget,
+                        "Selecione onde salvar o resultado da pesquisa",
+                        caminho_inicial,
+                        "Planilhas CSV (*.csv);;Todos os arquivos (*.*)"
+                    )
+                    return caminho if caminho else None
+            except Exception:
+                pass
+        return None
 
 class PlanilhaError(Exception):
     """Exceção levantada em caso de erros de validação ou estrutura da planilha CSV."""
@@ -1231,8 +1256,25 @@ def buscar_web_fallback(nome_clean: str, crm_clean: str, uf: str, session: Optio
         pass
     return dados
 
-def enriquecer_medico(nome: str, crm: str, uf_original: str = "", session: Optional[requests.Session] = None) -> Dict[str, str]:
-    """Combina todas as fontes públicas para enriquecer o registro do médico."""
+def enriquecer_medico(nome: str, crm: str, uf_original: str = "", session: Optional[requests.Session] = None, cancelar_evento: Optional[threading.Event] = None) -> Dict[str, str]:
+    """Combina todas as fontes públicas para enriquecer o registro do médico com verificação de cancelamento."""
+    if cancelar_evento and cancelar_evento.is_set():
+        return {
+            'nome': sanitizar_texto(nome),
+            'crm': sanitizar_texto(crm),
+            'uf': uf_original,
+            'especialidade': '',
+            'telefone': '',
+            'whatsapp_link': '',
+            'endereco': '',
+            'doctoralia_url': '',
+            'listamedicos_url': '',
+            'instagram_url': '',
+            'google_maps_link': '',
+            'google_search_link': '',
+            'status': 'Interrompido'
+        }
+
     s = session if session is not None else criar_sessao()
     nome_clean = limpar_nome_medico(nome)
     crm_num, uf = extrair_crm_e_uf(crm, uf_original)
@@ -1245,73 +1287,79 @@ def enriquecer_medico(nome: str, crm: str, uf_original: str = "", session: Optio
     url_lm = ""
     
     # 1. crm.com.br (alta confiabilidade para UF, CBO/Especialidade e Estabelecimentos CNES)
-    dados_crm = buscar_crm_com_br(nome_clean, crm_num, uf, session=s)
-    if not uf and dados_crm['uf']:
-        uf = dados_crm['uf']
-    if dados_crm['especialidade']:
-        especialidade = dados_crm['especialidade']
-    if dados_crm['endereco']:
-        enderecos_coletados.append(dados_crm['endereco'])
+    if not (cancelar_evento and cancelar_evento.is_set()):
+        dados_crm = buscar_crm_com_br(nome_clean, crm_num, uf, session=s)
+        if not uf and dados_crm['uf']:
+            uf = dados_crm['uf']
+        if dados_crm['especialidade']:
+            especialidade = dados_crm['especialidade']
+        if dados_crm['endereco']:
+            enderecos_coletados.append(dados_crm['endereco'])
         
     # 2. catalogo.med.br (alta confiabilidade para telefones via AJAX e endereços com CEP)
-    dados_cat = buscar_catalogo_med(nome_clean, crm_num, uf, session=s)
-    if dados_cat['telefones']:
-        for t in dados_cat['telefones']:
-            if t not in telefones_coletados:
-                telefones_coletados.append(t)
-    if dados_cat['enderecos']:
-        for e in dados_cat['enderecos']:
-            if e not in enderecos_coletados:
-                enderecos_coletados.append(e)
-    if not especialidade and dados_cat['especialidade']:
-        especialidade = dados_cat['especialidade']
-    if not uf and dados_cat['uf']:
-        uf = dados_cat['uf']
-        
-    # 3. Doctoralia (perfil oficial, especialidades e clínicas)
-    dados_doc = buscar_doctoralia(nome_clean, uf, session=s)
-    if dados_doc['doctoralia_url']:
-        url_doc = dados_doc['doctoralia_url']
-    if dados_doc['especialidade']:
-        especialidade = dados_doc['especialidade']
-    if dados_doc['endereco'] and dados_doc['endereco'] not in enderecos_coletados:
-        enderecos_coletados.append(dados_doc['endereco'])
-    if dados_doc['telefones']:
-        for t in dados_doc['telefones']:
-            if t not in telefones_coletados:
-                telefones_coletados.append(t)
-                
-    # 4. ListaMédicos (telefones e consultórios)
-    dados_lm = buscar_listamedicos(nome_clean, crm_num, session=s)
-    if dados_lm['url']:
-        url_lm = dados_lm['url']
-    if dados_lm['telefone'] and dados_lm['telefone'] not in telefones_coletados:
-        telefones_coletados.append(dados_lm['telefone'])
-    if dados_lm['endereco'] and dados_lm['endereco'] not in enderecos_coletados:
-        enderecos_coletados.append(dados_lm['endereco'])
-        
-    # 5. Instagram (DuckDuckGo HTML Web Dorking com fallback defensivo)
-    perfil_insta = buscar_instagram(nome_clean, uf, especialidade, session=s)
-    url_insta = str(perfil_insta) if perfil_insta else ""
-    if perfil_insta:
-        # Incorporar telefones extraídos da bio do Instagram
-        if hasattr(perfil_insta, 'telefones') and perfil_insta.telefones:
-            for t in perfil_insta.telefones:
+    if not (cancelar_evento and cancelar_evento.is_set()):
+        dados_cat = buscar_catalogo_med(nome_clean, crm_num, uf, session=s)
+        if dados_cat['telefones']:
+            for t in dados_cat['telefones']:
                 if t not in telefones_coletados:
                     telefones_coletados.append(t)
-        # Incorporar clínicas/endereços identificados aos endereços do médico
-        if hasattr(perfil_insta, 'enderecos') and perfil_insta.enderecos:
-            for e in perfil_insta.enderecos:
+        if dados_cat['enderecos']:
+            for e in dados_cat['enderecos']:
                 if e not in enderecos_coletados:
                     enderecos_coletados.append(e)
+        if not especialidade and dados_cat['especialidade']:
+            especialidade = dados_cat['especialidade']
+        if not uf and dados_cat['uf']:
+            uf = dados_cat['uf']
+        
+    # 3. Doctoralia (perfil oficial, especialidades e clínicas)
+    if not (cancelar_evento and cancelar_evento.is_set()):
+        dados_doc = buscar_doctoralia(nome_clean, uf, session=s)
+        if dados_doc['doctoralia_url']:
+            url_doc = dados_doc['doctoralia_url']
+        if dados_doc['especialidade']:
+            especialidade = dados_doc['especialidade']
+        if dados_doc['endereco'] and dados_doc['endereco'] not in enderecos_coletados:
+            enderecos_coletados.append(dados_doc['endereco'])
+        if dados_doc['telefones']:
+            for t in dados_doc['telefones']:
+                if t not in telefones_coletados:
+                    telefones_coletados.append(t)
+                
+    # 4. ListaMédicos (telefones e consultórios)
+    if not (cancelar_evento and cancelar_evento.is_set()):
+        dados_lm = buscar_listamedicos(nome_clean, crm_num, session=s)
+        if dados_lm['url']:
+            url_lm = dados_lm['url']
+        if dados_lm['telefone'] and dados_lm['telefone'] not in telefones_coletados:
+            telefones_coletados.append(dados_lm['telefone'])
+        if dados_lm['endereco'] and dados_lm['endereco'] not in enderecos_coletados:
+            enderecos_coletados.append(dados_lm['endereco'])
+        
+    # 5. Instagram (DuckDuckGo HTML Web Dorking com fallback defensivo)
+    if not (cancelar_evento and cancelar_evento.is_set()):
+        perfil_insta = buscar_instagram(nome_clean, uf, especialidade, session=s)
+        url_insta = str(perfil_insta) if perfil_insta else ""
+        if perfil_insta:
+            # Incorporar telefones extraídos da bio do Instagram
+            if hasattr(perfil_insta, 'telefones') and perfil_insta.telefones:
+                for t in perfil_insta.telefones:
+                    if t not in telefones_coletados:
+                        telefones_coletados.append(t)
+            # Incorporar clínicas/endereços identificados aos endereços do médico
+            if hasattr(perfil_insta, 'enderecos') and perfil_insta.enderecos:
+                for e in perfil_insta.enderecos:
+                    if e not in enderecos_coletados:
+                        enderecos_coletados.append(e)
 
     # 6. Fallback Web Leve se ainda faltar telefone ou endereço
-    if not telefones_coletados or not enderecos_coletados:
-        dados_fb = buscar_web_fallback(nome_clean, crm_num, uf, session=s)
-        if dados_fb['telefone'] and dados_fb['telefone'] not in telefones_coletados:
-            telefones_coletados.append(dados_fb['telefone'])
-        if not url_doc and dados_fb['doctoralia_url']:
-            url_doc = dados_fb['doctoralia_url']
+    if not (cancelar_evento and cancelar_evento.is_set()):
+        if not telefones_coletados or not enderecos_coletados:
+            dados_fb = buscar_web_fallback(nome_clean, crm_num, uf, session=s)
+            if dados_fb['telefone'] and dados_fb['telefone'] not in telefones_coletados:
+                telefones_coletados.append(dados_fb['telefone'])
+            if not url_doc and dados_fb['doctoralia_url']:
+                url_doc = dados_fb['doctoralia_url']
             
     # Consolidação
     telefone_final = consolidar_telefones(telefones_coletados)
@@ -1324,7 +1372,9 @@ def enriquecer_medico(nome: str, crm: str, uf_original: str = "", session: Optio
     termo_maps = f"{nome_clean} {especialidade} {uf}".strip()
     link_maps = f"https://www.google.com/maps/search/{urllib.parse.quote_plus(termo_maps)}"
     
-    if telefone_final and endereco_final:
+    if cancelar_evento and cancelar_evento.is_set():
+        status = "Interrompido"
+    elif telefone_final and endereco_final:
         status = "Completo (Tel + Endereço)"
     elif telefone_final:
         status = "Parcial (Telefone)"
@@ -1372,11 +1422,33 @@ def detectar_delimitador(caminho_arquivo: str, encoding: str) -> str:
         return ';'
     return ','
 
+class ResultadoProcessamento(tuple):
+    """Tupla personalizada (total, cancelado) compatível com int."""
+    def __new__(cls, total: int, cancelado: bool):
+        return super().__new__(cls, (total, cancelado))
+
+    @property
+    def total(self) -> int:
+        return self[0]
+
+    @property
+    def cancelado(self) -> bool:
+        return self[1]
+
+    def __int__(self) -> int:
+        return self.total
+
+    def __eq__(self, other):
+        if isinstance(other, int):
+            return self.total == other
+        return tuple.__eq__(self, other)
+
 def processar_planilha(
     arquivo_entrada: str,
     arquivo_saida: str = "Medicos_pesquisados.csv",
-    progresso_callback: Optional[Any] = None
-) -> int:
+    progresso_callback: Optional[Any] = None,
+    cancelar_evento: Optional[threading.Event] = None
+) -> ResultadoProcessamento:
     arquivo_entrada = resolver_caminho_arquivo(arquivo_entrada)
     if not os.path.exists(arquivo_entrada):
         msg = f"Arquivo '{arquivo_entrada}' não encontrado.\nCertifique-se de colocar sua planilha na mesma pasta ou passar o caminho completo."
@@ -1474,6 +1546,10 @@ def processar_planilha(
     
     modo = 'a' if not escrever_cabecalho else 'w'
     enc_saida = 'utf-8-sig' if modo == 'w' else 'utf-8'
+
+    total_processados = 0
+    cancelado = False
+
     with open(arquivo_saida, modo, encoding=enc_saida, newline='') as f_out, criar_sessao() as session:
         escritor = csv.DictWriter(f_out, fieldnames=campos_saida, delimiter=';')
         if escrever_cabecalho:
@@ -1481,6 +1557,12 @@ def processar_planilha(
             f_out.flush()
             
         for i, row in enumerate(linhas, 1):
+            if cancelar_evento and cancelar_evento.is_set():
+                cancelado = True
+                f_out.flush()
+                print("\n[!] Processamento interrompido pelo usuário.")
+                break
+
             nome_raw = row.get(col_nome, '')
             crm_raw = row.get(col_crm, '')
             uf_raw = row.get(col_uf, '') if col_uf else ''
@@ -1512,8 +1594,14 @@ def processar_planilha(
 
             print(f"[{i:3d}/{total}] {nome_sanit[:30]:30} ({crm_sanit}) ... ", end='', flush=True)
             
-            info = enriquecer_medico(nome_sanit, crm_sanit, uf_raw, session=session)
+            info = enriquecer_medico(nome_sanit, crm_sanit, uf_raw, session=session, cancelar_evento=cancelar_evento)
             
+            if info.get('status') == 'Interrompido':
+                cancelado = True
+                f_out.flush()
+                print("\n[!] Processamento interrompido pelo usuário.")
+                break
+
             escritor.writerow({
                 'Nome Original': info['nome'],
                 'CRM Original': info['crm'],
@@ -1530,6 +1618,8 @@ def processar_planilha(
                 'Status da Coleta': info['status']
             })
             f_out.flush()
+            total_processados += 1
+            processados_ids.add((nome_sanit, crm_sanit))
             
             detalhes = []
             if info['uf']:
@@ -1545,354 +1635,587 @@ def processar_planilha(
                 
             resumo = " | ".join(detalhes) if detalhes else "Links gerados"
             print(f"[{info['status']}] {resumo}")
+
+            if cancelar_evento and cancelar_evento.is_set():
+                cancelado = True
+                f_out.flush()
+                print("\n[!] Processamento interrompido pelo usuário.")
+                break
+
+            # Espera com suporte a cancelamento imediato
+            if cancelar_evento:
+                if cancelar_evento.wait(timeout=random.uniform(1.0, 1.8)):
+                    cancelado = True
+                    f_out.flush()
+                    print("\n[!] Processamento interrompido pelo usuário.")
+                    break
+            else:
+                time.sleep(random.uniform(1.0, 1.8))
             
-            time.sleep(random.uniform(1.0, 1.8))
-            
-    print("\n" + "=" * 65)
-    print(f"  Coleta concluída com sucesso!")
-    print(f"  Arquivo gerado: '{arquivo_saida}'")
-    print(f"  Formato: Delimitador ';' e codificação UTF-8 com BOM")
-    print(f"  Pode abrir diretamente no Microsoft Excel ou Google Sheets.")
-    print("=" * 65 + "\n")
-    return total
+    if cancelado:
+        return ResultadoProcessamento(total_processados, True)
+    else:
+        print("\n" + "=" * 65)
+        print(f"  Coleta concluída com sucesso!")
+        print(f"  Arquivo gerado: '{arquivo_saida}'")
+        print(f"  Formato: Delimitador ';' e codificação UTF-8 com BOM")
+        print(f"  Pode abrir diretamente no Microsoft Excel ou Google Sheets.")
+        print("=" * 65 + "\n")
+        return ResultadoProcessamento(total, False)
 
 # ---------------------------------------------------------------------------
-# Redirecionamento de Logs e Interface Gráfica (GUI)
+# Redirecionamento de Logs e Interface Gráfica Moderna (PyQt6 - Fluent Design)
 # ---------------------------------------------------------------------------
 
-class LogQueueWriter:
-    """Redirecionador seguro de stdout/stderr para a fila de logs da GUI e console original."""
-    def __init__(self, log_queue: queue.Queue, fallback_stream=None):
-        self.log_queue = log_queue
-        self.fallback_stream = fallback_stream
+ESTILO_FLUENT = """
+QMainWindow, QWidget#centralWidget {
+    background-color: #f1f5f9;
+    font-family: 'Segoe UI', -apple-system, BlinkMacSystemFont, Roboto, sans-serif;
+    color: #0f172a;
+}
 
-    def write(self, text: str):
-        if text:
-            self.log_queue.put(text)
-            if self.fallback_stream and hasattr(self.fallback_stream, 'write'):
+QFrame#cardFrame {
+    background-color: #ffffff;
+    border: 1px solid #e2e8f0;
+    border-radius: 8px;
+    padding: 12px;
+}
+
+QLabel#titleLabel {
+    font-size: 17px;
+    font-weight: 700;
+    color: #0f172a;
+}
+
+QLabel#subtitleLabel {
+    font-size: 12px;
+    color: #64748b;
+}
+
+QLabel#sectionTitle {
+    font-size: 13px;
+    font-weight: 600;
+    color: #334155;
+    margin-bottom: 2px;
+}
+
+QLabel#fieldLabel {
+    font-size: 12px;
+    font-weight: 600;
+    color: #475569;
+}
+
+QLineEdit {
+    background-color: #f8fafc;
+    border: 1px solid #cbd5e1;
+    border-radius: 6px;
+    padding: 8px 10px;
+    font-size: 12px;
+    color: #0f172a;
+}
+
+QLineEdit:focus {
+    border: 2px solid #0284c7;
+    background-color: #ffffff;
+}
+
+QLineEdit:read-only {
+    background-color: #f1f5f9;
+    color: #475569;
+}
+
+QPushButton#btnSelecionar {
+    background-color: #ffffff;
+    border: 1px solid #cbd5e1;
+    border-radius: 6px;
+    padding: 9px 16px;
+    font-size: 13px;
+    font-weight: 600;
+    color: #0f172a;
+}
+
+QPushButton#btnSelecionar:hover {
+    background-color: #f8fafc;
+    border-color: #94a3b8;
+}
+
+QPushButton#btnSelecionar:pressed {
+    background-color: #e2e8f0;
+}
+
+QPushButton#btnComecar {
+    background-color: #0284c7;
+    border: 1px solid #0284c7;
+    border-radius: 6px;
+    padding: 10px 18px;
+    font-size: 14px;
+    font-weight: 700;
+    color: #ffffff;
+}
+
+QPushButton#btnComecar:hover {
+    background-color: #0369a1;
+    border-color: #0369a1;
+}
+
+QPushButton#btnComecar:pressed {
+    background-color: #075985;
+}
+
+QPushButton#btnComecar:disabled {
+    background-color: #94a3b8;
+    border-color: #94a3b8;
+    color: #f8fafc;
+}
+
+QPushButton#btnCancelar {
+    background-color: #ef4444;
+    border: 1px solid #ef4444;
+    border-radius: 6px;
+    padding: 10px 18px;
+    font-size: 14px;
+    font-weight: 700;
+    color: #ffffff;
+}
+
+QPushButton#btnCancelar:hover {
+    background-color: #dc2626;
+    border-color: #dc2626;
+}
+
+QPushButton#btnCancelar:pressed {
+    background-color: #b91c1c;
+}
+
+QPushButton#btnCancelar:disabled {
+    background-color: #e2e8f0;
+    border-color: #e2e8f0;
+    color: #94a3b8;
+}
+
+QProgressBar {
+    background-color: #e2e8f0;
+    border: none;
+    border-radius: 6px;
+    height: 14px;
+    text-align: center;
+    font-size: 11px;
+    font-weight: 600;
+    color: #1e293b;
+}
+
+QProgressBar::chunk {
+    background-color: #0284c7;
+    border-radius: 6px;
+}
+
+QPlainTextEdit#logEdit {
+    background-color: #ffffff;
+    border: 1px solid #cbd5e1;
+    border-radius: 8px;
+    padding: 8px;
+    font-family: 'Consolas', 'Courier New', monospace;
+    font-size: 11px;
+    color: #1e293b;
+}
+
+QLabel#statusLabel {
+    font-size: 12px;
+    color: #475569;
+}
+"""
+
+if PYQT6_DISPONIVEL:
+    class WorkerSinais(QtCore.QObject):
+        progresso = QtCore.pyqtSignal(int, int, str)
+        log = QtCore.pyqtSignal(str)
+        concluido = QtCore.pyqtSignal(int, bool, str)  # total, cancelado, arquivo_saida
+        erro = QtCore.pyqtSignal(str)
+
+    class QtLogWriter:
+        """Redirecionador thread-safe de stdout/stderr para o log da GUI via sinal do Qt."""
+        def __init__(self, log_signal, fallback_stream=None):
+            self.log_signal = log_signal
+            self.fallback_stream = fallback_stream
+
+        def write(self, text: str):
+            if text:
                 try:
-                    self.fallback_stream.write(text)
+                    self.log_signal.emit(text)
+                except Exception:
+                    pass
+                if self.fallback_stream and hasattr(self.fallback_stream, 'write'):
+                    try:
+                        self.fallback_stream.write(text)
+                    except Exception:
+                        pass
+
+        def flush(self):
+            if self.fallback_stream and hasattr(self.fallback_stream, 'flush'):
+                try:
+                    self.fallback_stream.flush()
                 except Exception:
                     pass
 
-    def flush(self):
-        if self.fallback_stream and hasattr(self.fallback_stream, 'flush'):
-            try:
-                self.fallback_stream.flush()
-            except Exception:
-                pass
+    class BuscaMedicosWindow(QMainWindow):
+        def __init__(self):
+            super().__init__()
+            self.setWindowTitle("Busca Médicos - Coletor de Dados Públicos")
+            self.resize(840, 720)
+            self.setMinimumSize(660, 500)
 
-class BuscaMedicosGUI:
-    def __init__(self, root: tk.Tk):
-        self.root = root
-        self.root.title("Busca Médicos - Coletor de Dados Públicos")
-        self.root.geometry("740x580")
-        self.root.minsize(640, 480)
+            self.em_execucao = False
+            self.cancelar_evento: Optional[threading.Event] = None
 
-        self.em_execucao = False
+            self.sinais = WorkerSinais()
+            self.sinais.progresso.connect(self._on_progresso)
+            self.sinais.log.connect(self._on_log)
+            self.sinais.concluido.connect(self._on_concluido)
+            self.sinais.erro.connect(self._on_erro)
 
-        # Tema nativo do Windows no ttk quando disponível
-        style = ttk.Style()
-        temas_disponiveis = style.theme_names()
-        for tema in ['vista', 'winnative']:
-            if tema in temas_disponiveis:
-                style.theme_use(tema)
-                break
+            # Redirecionamento de stdout e stderr para o console de log da GUI
+            self._orig_stdout = sys.stdout
+            self._orig_stderr = sys.stderr
+            sys.stdout = QtLogWriter(self.sinais.log, self._orig_stdout)
+            sys.stderr = QtLogWriter(self.sinais.log, self._orig_stderr)
 
-        # Variáveis dos caminhos
-        self.caminho_entrada = tk.StringVar(value="")
-        self.caminho_saida = tk.StringVar(value="Medicos_pesquisados.csv")
+            self._construir_interface()
+            self.setStyleSheet(ESTILO_FLUENT)
 
-        # Fila e redirecionamento de logs
-        self.log_queue = queue.Queue()
-        self._orig_stdout = sys.stdout
-        self._orig_stderr = sys.stderr
-        sys.stdout = LogQueueWriter(self.log_queue, self._orig_stdout)
-        sys.stderr = LogQueueWriter(self.log_queue, self._orig_stderr)
+        def _obter_hwnd(self):
+            if os.name == 'nt':
+                try:
+                    return int(self.winId())
+                except Exception:
+                    return None
+            return None
 
-        self._construir_interface()
-        self.root.protocol("WM_DELETE_WINDOW", self._on_fechar)
-        self.root.after(100, self._atualizar_logs)
+        def _construir_interface(self):
+            # NOTA: Não criamos barra de menu (Menu) conforme solicitado pelo usuário.
+            self.setMenuBar(None)
 
-    def _obter_hwnd(self):
-        if os.name == 'nt':
-            try:
-                return self.root.winfo_id()
-            except Exception:
-                return None
-        return None
+            widget_central = QWidget()
+            widget_central.setObjectName("centralWidget")
+            self.setCentralWidget(widget_central)
 
-    def _construir_interface(self):
-        # NOTA: Não criamos barra de menu (Menu) conforme solicitado expressamente pelo usuário.
-        container = ttk.Frame(self.root, padding="15 15 15 15")
-        container.pack(fill='both', expand=True)
+            layout_principal = QVBoxLayout(widget_central)
+            layout_principal.setContentsMargins(16, 16, 16, 16)
+            layout_principal.setSpacing(10)
 
-        # Cabeçalho
-        frame_cabecalho = ttk.Frame(container)
-        frame_cabecalho.pack(fill='x', pady=(0, 12))
+            # Card de Cabeçalho
+            card_header = QFrame()
+            card_header.setObjectName("cardFrame")
+            layout_header = QVBoxLayout(card_header)
+            layout_header.setContentsMargins(12, 10, 12, 10)
+            layout_header.setSpacing(4)
 
-        lbl_titulo = ttk.Label(
-            frame_cabecalho,
-            text="Coletor de Dados Públicos de Médicos",
-            font=("Segoe UI" if os.name == 'nt' else "Helvetica", 13, "bold")
-        )
-        lbl_titulo.pack(anchor='w')
+            lbl_titulo = QLabel("Coletor de Dados Públicos de Médicos")
+            lbl_titulo.setObjectName("titleLabel")
+            lbl_sub = QLabel("Enriqueça planilhas com telefones, consultórios, links de WhatsApp e perfis públicos.")
+            lbl_sub.setObjectName("subtitleLabel")
+            layout_header.addWidget(lbl_titulo)
+            layout_header.addWidget(lbl_sub)
+            layout_principal.addWidget(card_header)
 
-        lbl_sub = ttk.Label(
-            frame_cabecalho,
-            text="Enriqueça planilhas com telefones, consultórios, links de WhatsApp e perfis públicos.",
-            font=("Segoe UI" if os.name == 'nt' else "Helvetica", 9)
-        )
-        lbl_sub.pack(anchor='w', pady=(2, 0))
+            # Card de Arquivos
+            card_arquivos = QFrame()
+            card_arquivos.setObjectName("cardFrame")
+            layout_arquivos = QVBoxLayout(card_arquivos)
+            layout_arquivos.setContentsMargins(12, 12, 12, 12)
+            layout_arquivos.setSpacing(8)
 
-        # Quadro de Seleção de Arquivos
-        frame_arquivos = ttk.LabelFrame(container, text=" Arquivos de Entrada e Saída ", padding="10 10 10 10")
-        frame_arquivos.pack(fill='x', pady=(0, 10))
+            lbl_secao_arq = QLabel("Arquivos de Entrada e Saída")
+            lbl_secao_arq.setObjectName("sectionTitle")
+            layout_arquivos.addWidget(lbl_secao_arq)
 
-        lbl_in = ttk.Label(frame_arquivos, text="Arquivo de Entrada (CSV):", font=("Segoe UI" if os.name == 'nt' else "Helvetica", 9, "bold"))
-        lbl_in.grid(row=0, column=0, sticky='w', pady=(0, 2))
+            lbl_in = QLabel("Arquivo de Entrada (CSV):")
+            lbl_in.setObjectName("fieldLabel")
+            layout_arquivos.addWidget(lbl_in)
 
-        entry_in = ttk.Entry(frame_arquivos, textvariable=self.caminho_entrada, state='readonly')
-        entry_in.grid(row=1, column=0, sticky='ew', pady=(0, 8))
+            self.edit_entrada = QLineEdit()
+            self.edit_entrada.setReadOnly(True)
+            self.edit_entrada.setPlaceholderText("Nenhum arquivo CSV selecionado...")
+            layout_arquivos.addWidget(self.edit_entrada)
 
-        lbl_out = ttk.Label(frame_arquivos, text="Arquivo de Saída (CSV):", font=("Segoe UI" if os.name == 'nt' else "Helvetica", 9, "bold"))
-        lbl_out.grid(row=2, column=0, sticky='w', pady=(0, 2))
+            lbl_out = QLabel("Arquivo de Saída (CSV):")
+            lbl_out.setObjectName("fieldLabel")
+            layout_arquivos.addWidget(lbl_out)
 
-        entry_out = ttk.Entry(frame_arquivos, textvariable=self.caminho_saida)
-        entry_out.grid(row=3, column=0, sticky='ew', pady=(0, 8))
+            self.edit_saida = QLineEdit("Medicos_pesquisados.csv")
+            layout_arquivos.addWidget(self.edit_saida)
 
-        frame_arquivos.columnconfigure(0, weight=1)
+            self.btn_selecionar = QPushButton("Selecionar Arquivo de entrada e Local de Saída")
+            self.btn_selecionar.setObjectName("btnSelecionar")
+            self.btn_selecionar.setCursor(Qt.CursorShape.PointingHandCursor)
+            self.btn_selecionar.clicked.connect(self.selecionar_sequencial)
+            layout_arquivos.addWidget(self.btn_selecionar)
 
-        # Botão 1: Seleção em Sequência (Entrada -> Saída)
-        self.btn_selecionar = ttk.Button(
-            frame_arquivos,
-            text="Selecionar Arquivo de entrada e Local de Saída",
-            command=self.selecionar_sequencial
-        )
-        self.btn_selecionar.grid(row=4, column=0, sticky='ew', pady=(4, 2))
+            layout_principal.addWidget(card_arquivos)
 
-        # Botão 2: Começar
-        frame_acao = ttk.Frame(container)
-        frame_acao.pack(fill='x', pady=(5, 10))
+            # Layout de Ações: Botão Começar e Botão Cancelar Lado a Lado (QHBoxLayout)
+            layout_botoes = QHBoxLayout()
+            layout_botoes.setSpacing(10)
 
-        self.btn_comecar = ttk.Button(
-            frame_acao,
-            text="Começar",
-            command=self.on_comecar
-        )
-        self.btn_comecar.pack(fill='x', ipady=6)
+            self.btn_comecar = QPushButton("Começar")
+            self.btn_comecar.setObjectName("btnComecar")
+            self.btn_comecar.setCursor(Qt.CursorShape.PointingHandCursor)
+            self.btn_comecar.clicked.connect(self.on_comecar)
 
-        # Barra de Progresso e Status
-        frame_progresso = ttk.Frame(container)
-        frame_progresso.pack(fill='x', pady=(0, 8))
+            self.btn_cancelar = QPushButton("Cancelar")
+            self.btn_cancelar.setObjectName("btnCancelar")
+            self.btn_cancelar.setCursor(Qt.CursorShape.PointingHandCursor)
+            self.btn_cancelar.setEnabled(False)  # Desabilitado inicialmente
+            self.btn_cancelar.clicked.connect(self.on_cancelar)
 
-        self.status_label = ttk.Label(
-            frame_progresso,
-            text="Pronto para iniciar. Selecione os arquivos e clique em 'Começar'.",
-            font=("Segoe UI" if os.name == 'nt' else "Helvetica", 9)
-        )
-        self.status_label.pack(anchor='w', pady=(0, 4))
+            layout_botoes.addWidget(self.btn_comecar, 1)
+            layout_botoes.addWidget(self.btn_cancelar, 1)
+            layout_principal.addLayout(layout_botoes)
 
-        self.progresso = ttk.Progressbar(frame_progresso, orient='horizontal', mode='determinate')
-        self.progresso.pack(fill='x')
+            # Card de Progresso e Status
+            card_progresso = QFrame()
+            card_progresso.setObjectName("cardFrame")
+            layout_progresso = QVBoxLayout(card_progresso)
+            layout_progresso.setContentsMargins(12, 10, 12, 10)
+            layout_progresso.setSpacing(6)
 
-        # Área de Logs em Tempo Real
-        lbl_logs = ttk.Label(
-            container,
-            text="Registro de Atividades (Logs em tempo real):",
-            font=("Segoe UI" if os.name == 'nt' else "Helvetica", 9, "bold")
-        )
-        lbl_logs.pack(anchor='w', pady=(4, 2))
+            self.status_label = QLabel("Pronto para iniciar. Selecione os arquivos e clique em 'Começar'.")
+            self.status_label.setObjectName("statusLabel")
+            layout_progresso.addWidget(self.status_label)
 
-        frame_log = ttk.Frame(container)
-        frame_log.pack(fill='both', expand=True)
+            self.progresso = QProgressBar()
+            self.progresso.setRange(0, 100)
+            self.progresso.setValue(0)
+            layout_progresso.addWidget(self.progresso)
 
-        scroll = ttk.Scrollbar(frame_log, orient='vertical')
-        scroll.pack(side='right', fill='y')
+            layout_principal.addWidget(card_progresso)
 
-        self.area_log = tk.Text(
-            frame_log,
-            wrap='char',
-            yscrollcommand=scroll.set,
-            font=("Consolas" if os.name == 'nt' else "Monospace", 9),
-            state='disabled',
-            bg="#fdfdfd" if os.name == 'nt' else "#ffffff",
-            relief='solid',
-            borderwidth=1
-        )
-        self.area_log.pack(side='left', fill='both', expand=True)
-        scroll.config(command=self.area_log.yview)
+            # Card de Logs em Tempo Real
+            card_logs = QFrame()
+            card_logs.setObjectName("cardFrame")
+            layout_logs = QVBoxLayout(card_logs)
+            layout_logs.setContentsMargins(12, 10, 12, 10)
+            layout_logs.setSpacing(6)
 
-    def selecionar_sequencial(self):
-        """Abre em sequência: 1º entrada via GetOpenFileNameW, depois saída via GetSaveFileNameW."""
-        hwnd = self._obter_hwnd()
-        dir_atual = ""
-        if self.caminho_entrada.get() and os.path.exists(self.caminho_entrada.get()):
-            dir_atual = os.path.dirname(os.path.abspath(self.caminho_entrada.get()))
-        elif os.path.exists(os.getcwd()):
-            dir_atual = os.getcwd()
+            lbl_logs = QLabel("Registro de Atividades (Logs em tempo real):")
+            lbl_logs.setObjectName("sectionTitle")
+            layout_logs.addWidget(lbl_logs)
 
-        # Diálogo 1: Selecionar entrada
-        arquivo_in = selecionar_arquivo_entrada_nativo(hwnd=hwnd, dir_inicial=dir_atual)
-        if not arquivo_in:
-            return  # Usuário cancelou
+            self.log_edit = QPlainTextEdit()
+            self.log_edit.setObjectName("logEdit")
+            self.log_edit.setReadOnly(True)
+            layout_logs.addWidget(self.log_edit)
 
-        self.caminho_entrada.set(arquivo_in)
-        dir_sugerido = os.path.dirname(os.path.abspath(arquivo_in))
-        saida_padrao = os.path.join(dir_sugerido, "Medicos_pesquisados.csv")
+            layout_principal.addWidget(card_logs, 1)
 
-        # Diálogo 2: Selecionar saída imediatamente (se o 1º não foi cancelado)
-        arquivo_out = selecionar_arquivo_saida_nativo(
-            hwnd=hwnd,
-            dir_inicial=dir_sugerido,
-            nome_padrao="Medicos_pesquisados.csv"
-        )
-        if arquivo_out:
-            self.caminho_saida.set(arquivo_out)
-        else:
-            # Fallback seguro com caminho padrão preenchido
-            if not self.caminho_saida.get() or self.caminho_saida.get() == "Medicos_pesquisados.csv":
-                self.caminho_saida.set(saida_padrao)
+        def selecionar_sequencial(self):
+            """Executa a seleção em sequência:
+            1. Abre diálogo nativo do Windows para escolher o CSV de entrada.
+            2. Se selecionado, abre automaticamente o diálogo nativo de salvamento com 'Medicos_pesquisados.csv'.
+            """
+            hwnd = self._obter_hwnd()
+            dir_atual = ""
+            entrada_atual = self.edit_entrada.text().strip()
+            if entrada_atual and os.path.exists(entrada_atual):
+                dir_atual = os.path.dirname(os.path.abspath(entrada_atual))
+            elif os.path.exists(os.getcwd()):
+                dir_atual = os.getcwd()
 
-        self.status_label.config(text="Arquivos selecionados. Clique em 'Começar' para iniciar a busca.")
+            # Diálogo 1: Selecionar entrada
+            arquivo_in = selecionar_arquivo_entrada_nativo(hwnd=hwnd, dir_inicial=dir_atual, parent_widget=self)
+            if not arquivo_in:
+                return  # Usuário cancelou
 
-    def on_comecar(self):
-        """Inicia a busca na aplicação ou aciona a seleção caso os arquivos ainda não tenham sido definidos."""
-        if self.em_execucao:
-            return
+            self.edit_entrada.setText(arquivo_in)
+            dir_sugerido = os.path.dirname(os.path.abspath(arquivo_in))
+            saida_padrao = os.path.join(dir_sugerido, "Medicos_pesquisados.csv")
 
-        arquivo_in = self.caminho_entrada.get().strip()
-        if not arquivo_in or not os.path.exists(arquivo_in):
-            # Se o usuário clicar em "Começar" sem ter escolhido os arquivos ainda, aciona a seleção em sequência
-            self.selecionar_sequencial()
-            arquivo_in = self.caminho_entrada.get().strip()
+            # Diálogo 2: Selecionar saída imediatamente (se o 1º não foi cancelado)
+            arquivo_out = selecionar_arquivo_saida_nativo(
+                hwnd=hwnd,
+                dir_inicial=dir_sugerido,
+                nome_padrao="Medicos_pesquisados.csv",
+                parent_widget=self
+            )
+            if arquivo_out:
+                self.edit_saida.setText(arquivo_out)
+            else:
+                saida_atual = self.edit_saida.text().strip()
+                if not saida_atual or saida_atual == "Medicos_pesquisados.csv":
+                    self.edit_saida.setText(saida_padrao)
+
+            self.status_label.setText("Arquivos configurados. Clique em 'Começar' para iniciar a busca.")
+
+        def on_comecar(self):
+            """Inicia a busca na aplicação ou aciona a seleção caso os arquivos ainda não tenham sido definidos."""
+            if self.em_execucao:
+                return
+
+            arquivo_in = self.edit_entrada.text().strip()
             if not arquivo_in or not os.path.exists(arquivo_in):
+                # Se o usuário clicar em "Começar" sem ter escolhido os arquivos ainda, aciona a seleção sequencial
+                self.selecionar_sequencial()
+                arquivo_in = self.edit_entrada.text().strip()
+                if not arquivo_in or not os.path.exists(arquivo_in):
+                    mostrar_mensagem_nativa(
+                        "Arquivo de Entrada Não Selecionado",
+                        "Por favor, selecione uma planilha CSV de entrada válida antes de começar.",
+                        tipo="aviso",
+                        hwnd=self._obter_hwnd(),
+                        parent_widget=self
+                    )
+                    return
+
+            arquivo_out = self.edit_saida.text().strip()
+            if not arquivo_out:
+                dir_in = os.path.dirname(os.path.abspath(arquivo_in))
+                arquivo_out = os.path.join(dir_in, "Medicos_pesquisados.csv")
+                self.edit_saida.setText(arquivo_out)
+
+            self._iniciar_execucao(arquivo_in, arquivo_out)
+
+        def _iniciar_execucao(self, arquivo_in: str, arquivo_out: str):
+            self.em_execucao = True
+            self.cancelar_evento = threading.Event()
+
+            self.btn_comecar.setEnabled(False)
+            self.btn_selecionar.setEnabled(False)
+            self.btn_cancelar.setEnabled(True)
+
+            self.progresso.setValue(0)
+            self.status_label.setText("Iniciando busca e enriquecimento de dados...")
+
+            def worker():
+                try:
+                    res = processar_planilha(
+                        arquivo_in,
+                        arquivo_out,
+                        progresso_callback=lambda i, tot, nm: self.sinais.progresso.emit(i, tot, nm),
+                        cancelar_evento=self.cancelar_evento
+                    )
+                    self.sinais.concluido.emit(res.total, res.cancelado, arquivo_out)
+                except Exception as e:
+                    self.sinais.erro.emit(str(e))
+
+            self.worker_thread = threading.Thread(target=worker, daemon=True)
+            self.worker_thread.start()
+
+        def on_cancelar(self):
+            """Disparado ao clicar no botão Cancelar: interrompe a execução com segurança."""
+            if not self.em_execucao or self.cancelar_evento is None:
+                return
+
+            self.btn_cancelar.setEnabled(False)
+            self.status_label.setText("Cancelando processamento... aguarde.")
+            self.cancelar_evento.set()
+
+        def _on_progresso(self, i: int, total: int, nome: str):
+            if total > 0:
+                self.progresso.setMaximum(total)
+                self.progresso.setValue(i)
+            self.status_label.setText(f"Processando [{i}/{total}]: {nome}")
+
+        def _on_log(self, text: str):
+            self.log_edit.moveCursor(QtGui.QTextCursor.MoveOperation.End)
+            self.log_edit.insertPlainText(text)
+            self.log_edit.moveCursor(QtGui.QTextCursor.MoveOperation.End)
+
+        def _on_concluido(self, total: int, cancelado: bool, arquivo_out: str):
+            self.em_execucao = False
+            self.btn_comecar.setEnabled(True)
+            self.btn_selecionar.setEnabled(True)
+            self.btn_cancelar.setEnabled(False)
+
+            if cancelado:
+                self.status_label.setText("Processamento cancelado pelo usuário.")
                 mostrar_mensagem_nativa(
-                    "Arquivo de Entrada Não Selecionado",
-                    "Por favor, selecione uma planilha CSV de entrada válida antes de começar.",
+                    "Processamento Interrompido",
+                    f"O processamento foi interrompido pelo usuário.\n\n"
+                    f"Registros processados e salvos: {total}\n"
+                    f"Arquivo salvo:\n{arquivo_out}",
                     tipo="aviso",
-                    hwnd=self._obter_hwnd()
+                    hwnd=self._obter_hwnd(),
+                    parent_widget=self
                 )
-                return
+            else:
+                self.progresso.setValue(self.progresso.maximum())
+                self.status_label.setText(f"Concluído com sucesso! {total} médicos processados.")
+                mostrar_mensagem_nativa(
+                    "Busca Concluída com Sucesso",
+                    f"A coleta e enriquecimento dos médicos foram concluídos com sucesso!\n\n"
+                    f"Total de registros processados: {total}\n"
+                    f"Arquivo gerado:\n{arquivo_out}\n\n"
+                    f"O arquivo pode ser aberto diretamente no Microsoft Excel.",
+                    tipo="info",
+                    hwnd=self._obter_hwnd(),
+                    parent_widget=self
+                )
 
-        arquivo_out = self.caminho_saida.get().strip()
-        if not arquivo_out:
-            dir_in = os.path.dirname(os.path.abspath(arquivo_in))
-            arquivo_out = os.path.join(dir_in, "Medicos_pesquisados.csv")
-            self.caminho_saida.set(arquivo_out)
-
-        self._iniciar_execucao(arquivo_in, arquivo_out)
-
-    def _iniciar_execucao(self, arquivo_in: str, arquivo_out: str):
-        self.em_execucao = True
-        self.btn_comecar.config(state='disabled')
-        self.btn_selecionar.config(state='disabled')
-        self.progresso['value'] = 0
-        self.status_label.config(text="Iniciando processamento...")
-
-        t = threading.Thread(
-            target=self._worker_processamento,
-            args=(arquivo_in, arquivo_out),
-            daemon=True
-        )
-        t.start()
-
-    def _worker_processamento(self, arquivo_in: str, arquivo_out: str):
-        try:
-            total = processar_planilha(
-                arquivo_in,
-                arquivo_out,
-                progresso_callback=self._progresso_callback
+        def _on_erro(self, msg_erro: str):
+            self.em_execucao = False
+            self.btn_comecar.setEnabled(True)
+            self.btn_selecionar.setEnabled(True)
+            self.btn_cancelar.setEnabled(False)
+            self.status_label.setText("Erro durante o processamento.")
+            mostrar_mensagem_nativa(
+                "Erro no Processamento",
+                f"Não foi possível concluir a busca:\n\n{msg_erro}",
+                tipo="erro",
+                hwnd=self._obter_hwnd(),
+                parent_widget=self
             )
-            self.root.after(0, lambda: self._on_sucesso(total, arquivo_out))
-        except Exception as e:
-            msg_erro = str(e)
-            self.root.after(0, lambda: self._on_erro(msg_erro))
 
-    def _progresso_callback(self, i: int, total: int, nome: str):
-        def _atualizar():
-            self.progresso['maximum'] = total
-            self.progresso['value'] = i
-            self.status_label.config(text=f"Processando [{i}/{total}]: {nome}")
-        self.root.after(0, _atualizar)
+        def closeEvent(self, event):
+            if self.em_execucao:
+                ret = mostrar_mensagem_nativa(
+                    "Confirmação de Saída",
+                    "Uma busca está em andamento no momento.\nDeseja realmente cancelar o processamento e fechar a aplicação?",
+                    tipo="pergunta",
+                    hwnd=self._obter_hwnd(),
+                    parent_widget=self
+                )
+                if ret != IDYES:
+                    event.ignore()
+                    return
+                if self.cancelar_evento:
+                    self.cancelar_evento.set()
 
-    def _on_sucesso(self, total: int, arquivo_out: str):
-        self.em_execucao = False
-        self.btn_comecar.config(state='normal')
-        self.btn_selecionar.config(state='normal')
-        self.progresso['value'] = self.progresso['maximum']
-        self.status_label.config(text=f"Concluído! {total} médicos processados com sucesso.")
-        mostrar_mensagem_nativa(
-            "Busca Concluída com Sucesso",
-            f"A coleta e enriquecimento dos médicos foram concluídos com sucesso!\n\n"
-            f"Total de registros: {total}\n"
-            f"Arquivo gerado:\n{arquivo_out}\n\n"
-            f"O arquivo pode ser aberto diretamente no Microsoft Excel.",
-            tipo="info",
-            hwnd=self._obter_hwnd()
-        )
-
-    def _on_erro(self, msg_erro: str):
-        self.em_execucao = False
-        self.btn_comecar.config(state='normal')
-        self.btn_selecionar.config(state='normal')
-        self.status_label.config(text="Erro durante o processamento.")
-        mostrar_mensagem_nativa(
-            "Erro no Processamento",
-            f"Não foi possível concluir a busca:\n\n{msg_erro}",
-            tipo="erro",
-            hwnd=self._obter_hwnd()
-        )
-
-    def _atualizar_logs(self):
-        texto_acumulado = []
-        try:
-            while True:
-                texto = self.log_queue.get_nowait()
-                texto_acumulado.append(texto)
-        except queue.Empty:
-            pass
-
-        if texto_acumulado:
-            self.area_log.configure(state='normal')
-            self.area_log.insert('end', "".join(texto_acumulado))
-            self.area_log.see('end')
-            self.area_log.configure(state='disabled')
-
-        self.root.after(100, self._atualizar_logs)
-
-    def _on_fechar(self):
-        if self.em_execucao:
-            ret = mostrar_mensagem_nativa(
-                "Confirmação de Saída",
-                "Uma busca está em andamento no momento.\nDeseja realmente interromper e fechar?",
-                tipo="pergunta",
-                hwnd=self._obter_hwnd()
-            )
-            if ret != IDYES:
-                return
-        sys.stdout = self._orig_stdout
-        sys.stderr = self._orig_stderr
-        self.root.destroy()
+            sys.stdout = self._orig_stdout
+            sys.stderr = self._orig_stderr
+            event.accept()
 
 def iniciar_gui():
-    """Inicia a aplicação gráfica."""
+    """Inicia a aplicação gráfica moderna em PyQt6."""
+    if not PYQT6_DISPONIVEL:
+        print("\n[!] PyQt6 não está instalado no ambiente.")
+        print("    Para usar a interface gráfica, instale com:")
+        print("    pip install PyQt6\n")
+        sys.exit(1)
+
     ativar_high_dpi()
-    root = tk.Tk()
-    app = BuscaMedicosGUI(root)
-    root.mainloop()
+    app = QApplication.instance()
+    criou_app = False
+    if app is None:
+        app = QApplication(sys.argv)
+        criou_app = True
+
+    app.setStyle("Fusion")
+    janela = BuscaMedicosWindow()
+    janela.show()
+
+    if criou_app:
+        sys.exit(app.exec())
 
 if __name__ == '__main__':
     if len(sys.argv) > 1:
         if sys.argv[1] in ('-h', '--help'):
             print("Uso: python buscar_medicos.py [arquivo_entrada.csv] [arquivo_saida.csv]")
-            print("     Sem argumentos: inicia a interface gráfica (GUI).")
+            print("     Sem argumentos: inicia a interface gráfica moderna (PyQt6).")
             sys.exit(0)
 
         arquivo_in = resolver_caminho_arquivo(sys.argv[1])
         arquivo_out = sys.argv[2] if len(sys.argv) > 2 else "Medicos_pesquisados.csv"
         try:
-            processar_planilha(arquivo_in, arquivo_out)
+            res = processar_planilha(arquivo_in, arquivo_out)
         except Exception as e:
             print(f"\n[!] Erro no processamento: {e}", file=sys.stderr)
             sys.exit(1)
