@@ -1666,7 +1666,7 @@ class BuscaMedicosGUI:
         # Botão 1: Seleção em Sequência (Entrada -> Saída)
         self.btn_selecionar = ttk.Button(
             frame_arquivos,
-            text="Selecionar Arquivo e Local de Saída",
+            text="Selecionar Arquivo de entrada e Local de Saída",
             command=self.selecionar_sequencial
         )
         self.btn_selecionar.grid(row=4, column=0, sticky='ew', pady=(4, 2))
